@@ -1,0 +1,381 @@
+
+-- Remember where the reset happened so we can teleport back there after respawning.
+local resetCFrame = game.Players.LocalPlayer.Character:GetPivot()
+
+game.Players.LocalPlayer.Character:BreakJoints()
+task.wait(6)
+
+-- Wither limbs: 2 small heads on the legs, a big head between them and a helmet on top.
+-- Everything is positioned relative to HumanoidRootPart (not the legs), so the leg swing
+-- while walking never shakes the accessories.
+
+local HEAD_1 = "119543368355293"
+local HEAD_2 = "119543368355293"
+local HELMET = "13510158183"
+local BIG_HEAD = "13805679848"
+
+-- Offsets from HumanoidRootPart (studs). Leg centre is 2 below the root and 0.5 to the side.
+local LEG_Y = -2
+local LEG_X = 0.5
+local OUTWARDS = 1 -- studs outward from the leg
+local RAISE = 2 -- studs up
+local CLOSER = 1 -- small heads move this much towards the big head
+local BIG_HEAD_UP = 0.5
+local BIG_FORWARD = 0.5-- big heads (and the helmet on top) sit this far in front of the player
+
+-- The heads must face the front of the player (not up). Change this if the mesh comes out turned.
+-- The meshes' faces point up by default, so every piece is tipped forward. If they come out
+-- facing backward use +90, if they're still wrong try Angles(0, 0, math.rad(...)) variants.
+local FACE_ROT = CFrame.Angles(math.rad(-90), 0, 0)
+local HEAD_ROT = FACE_ROT
+local BIG_HEAD_ROT = FACE_ROT
+local HELMET_ROT = FACE_ROT
+local HELMET_EXTRA_Y = -0.6 -- extra gap between big head and helmet (negative = lower)
+local HELMET_FORWARD = 2 -- helmet sits this much further forward than the second big head
+local ALL_FORWARD = 0.9-- every accessory moves this far forward...
+local ALL_DOWN = 1.3 -- ...and this far down
+
+local Players = game:GetService("Players")
+local rs = game:GetService("RunService")
+local heartbeat = rs.Heartbeat
+local stepped = rs.RenderStepped
+local ti = table.insert
+local netless_Y = Vector3.new(0, -30, 0)
+local v3_101 = Vector3.new(1, 0, 1)
+local inf = math.huge
+
+local lp = Players.LocalPlayer
+local char = lp.Character or lp.CharacterAdded:Wait()
+local root = char:WaitForChild("HumanoidRootPart")
+
+local function tpBack()
+    char:PivotTo(resetCFrame)
+end
+
+tpBack()
+
+for _, part in pairs(char:GetDescendants()) do
+    if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+        part.Massless = false
+    end
+end
+
+----------------------------------------------------------------------
+-- Command sending (chat)
+----------------------------------------------------------------------
+
+local function sendCmd(text)
+    game:GetService("TextChatService").TextChannels.RBXGeneral:SendAsync(text)
+end
+
+----------------------------------------------------------------------
+-- Netless alignment
+----------------------------------------------------------------------
+
+local function getNetlessVelocity(realPartVelocity)
+    if not realPartVelocity then
+        return Vector3.zero
+    end
+
+    if math.abs(realPartVelocity.Y) > 1 then
+        return realPartVelocity * (25.1 / realPartVelocity.Y)
+    end
+
+    realPartVelocity = realPartVelocity * v3_101
+    local mag = realPartVelocity.Magnitude
+
+    if mag > 1 then
+        realPartVelocity = realPartVelocity * (100 / mag)
+    end
+
+    return realPartVelocity + netless_Y
+end
+
+local function align(Part0, Part1)
+    Part0.CustomPhysicalProperties =
+        PhysicalProperties.new(0.0001, 0.0001, 0.0001, 0.0001, 0.0001)
+
+    Part0.CFrame = Part1.CFrame
+
+    local att0 = Instance.new("Attachment", Part0)
+    att0.Name = "att0_" .. Part0.Name
+
+    local att1 = Instance.new("Attachment", Part1)
+    att1.Name = "att1_" .. Part1.Name
+
+    local ape = Instance.new("AlignPosition", att0)
+    ape.Name = "AlignPositionRtrue"
+    ape.ApplyAtCenterOfMass = false
+    ape.MaxForce = inf
+    ape.MaxVelocity = inf
+    ape.ReactionForceEnabled = false
+    ape.Responsiveness = 200
+    ape.Attachment0 = att0
+    ape.Attachment1 = att1
+    ape.RigidityEnabled = true
+
+    local ao = Instance.new("AlignOrientation", att0)
+    ao.Name = "AlignOrientation"
+    ao.MaxAngularVelocity = inf
+    ao.MaxTorque = inf
+    ao.PrimaryAxisOnly = false
+    ao.ReactionTorqueEnabled = false
+    ao.Responsiveness = 200
+    ao.Attachment0 = att0
+    ao.Attachment1 = att1
+    ao.RigidityEnabled = true
+
+    local realVelocity = Vector3.new(0, 30, 0)
+
+    local steppedcon = stepped:Connect(function()
+        if Part0 and Part0.Parent then
+            Part0.Velocity = realVelocity
+        end
+    end)
+
+    local heartbeatcon = heartbeat:Connect(function()
+        if Part0 and Part0.Parent then
+            realVelocity = Part0.Velocity
+            Part0.Velocity = getNetlessVelocity(realVelocity)
+        end
+    end)
+
+    Part0.Destroying:Connect(function()
+        steppedcon:Disconnect()
+        heartbeatcon:Disconnect()
+    end)
+end
+
+----------------------------------------------------------------------
+-- Get the accessories (they arrive in the order of the -gh command)
+----------------------------------------------------------------------
+
+local ignore = {}
+local palhairs = {}
+
+for _, v in pairs(char:GetChildren()) do
+    if v:IsA("Accessory") then
+        ti(ignore, v)
+    end
+end
+
+char.ChildAdded:Connect(function(child)
+    if child:IsA("Accessory")
+        and not table.find(ignore, child)
+        and not table.find(palhairs, child) then
+        ti(palhairs, child)
+    end
+end)
+
+sendCmd("-gh " .. table.concat({ BIG_HEAD, BIG_HEAD, BIG_HEAD, HELMET, HEAD_1, HEAD_2 }, " "))
+
+task.wait(1)
+
+sendCmd("-net")
+
+local waitStart = os.clock()
+
+repeat
+    task.wait()
+until #palhairs >= 6 or os.clock() - waitStart > 15
+
+tpBack()
+
+if #palhairs < 6 then
+    warn("Expected 6 accessories, got " .. #palhairs)
+    return
+end
+
+for _, acc in ipairs(palhairs) do
+    for _, v in pairs(acc:GetDescendants()) do
+        if v:IsA("Constraint") or v:IsA("Weld") then
+            v:Destroy()
+        end
+    end
+end
+
+----------------------------------------------------------------------
+-- Layout (all offsets relative to HumanoidRootPart)
+----------------------------------------------------------------------
+
+local function handleOf(i)
+    local h = palhairs[i]:FindFirstChild("Handle")
+    assert(h, "Accessory " .. i .. " has no Handle")
+    return h
+end
+
+-- Matches the order of the -gh command: Big Head x3, Helmet, Head 1, Head 2.
+local bigHead = handleOf(1)
+local bigHead2 = handleOf(2)
+local bigHead3 = handleOf(3)
+local helmet = handleOf(4)
+local head1 = handleOf(5)
+local head2 = handleOf(6)
+
+local smallY = LEG_Y + RAISE
+local smallX = LEG_X + OUTWARDS - CLOSER -- 1 out, then CLOSER back in towards the big head
+
+local bigY = smallY + BIG_HEAD_UP
+
+-- The pieces are tipped forward, so a handle's local Z points up in the world and its
+-- local Y points forward. The second big head extends the first one forward: it is centred
+-- on the first one's tip (its front edge) at the same height, and the helmet sits on the
+-- top of the second one.
+-- The third big head continues the same way from the tip of the second one.
+local bigZ2 = BIG_FORWARD + bigHead.Size.Y / 2
+local bigZ3 = bigZ2 + bigHead2.Size.Y / 2
+local helmetY = bigY + bigHead2.Size.Z / 2 + HELMET_EXTRA_Y
+local helmetZ = bigZ2 + HELMET_FORWARD
+
+-- Moves every accessory together.
+local ALL_SHIFT = CFrame.new(0, -ALL_DOWN, -ALL_FORWARD)
+
+local units = {
+    { handle = head1, offset = ALL_SHIFT * CFrame.new(-smallX, smallY, 0) * HEAD_ROT }, -- left leg
+    { handle = head2, offset = ALL_SHIFT * CFrame.new(smallX, smallY, 0) * HEAD_ROT }, -- right leg
+    { handle = bigHead, offset = ALL_SHIFT * CFrame.new(0, bigY, -BIG_FORWARD) * BIG_HEAD_ROT },
+    { handle = bigHead2, offset = ALL_SHIFT * CFrame.new(0, bigY, -bigZ2) * BIG_HEAD_ROT },
+    { handle = bigHead3, offset = ALL_SHIFT * CFrame.new(0, bigY, -bigZ3) * BIG_HEAD_ROT },
+    { handle = helmet, offset = ALL_SHIFT * CFrame.new(0, helmetY, -helmetZ) * HELMET_ROT },
+}
+
+for i, unit in ipairs(units) do
+    local handle = unit.handle
+    handle.Massless = true
+    handle.CanCollide = false
+    handle.CanTouch = false
+    handle.CanQuery = false
+
+    local anchor = Instance.new("Part")
+    anchor.Name = "WitherAnchor" .. i
+    anchor.Size = Vector3.new(0.2, 0.2, 0.2)
+    anchor.Transparency = 1
+    anchor.Anchored = true
+    anchor.CanCollide = false
+    anchor.CanTouch = false
+    anchor.CanQuery = false
+    anchor.CFrame = root.CFrame * unit.offset
+    anchor.Parent = workspace
+
+    align(handle, anchor)
+    unit.anchor = anchor
+end
+
+----------------------------------------------------------------------
+-- Chat commands
+--   .give <name>  puts it on that player (username, display name or the start of either)
+--   .v            hides it underground, or shows it again if it's already hidden
+----------------------------------------------------------------------
+
+local HIDE_DEPTH = 40
+
+local followPlayer = lp
+local hidden = false
+
+local function getFollowRoot()
+    local c = followPlayer and followPlayer.Character
+    return c and c:FindFirstChild("HumanoidRootPart")
+end
+
+local function findPlayer(query)
+    query = query:lower()
+
+    -- Exact username / display name first, then anything that starts with the text.
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p.Name:lower() == query or p.DisplayName:lower() == query then
+            return p
+        end
+    end
+
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p.Name:lower():sub(1, #query) == query
+            or p.DisplayName:lower():sub(1, #query) == query then
+            return p
+        end
+    end
+
+    -- Last resort: the text appears anywhere in the name.
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p.Name:lower():find(query, 1, true) or p.DisplayName:lower():find(query, 1, true) then
+            return p
+        end
+    end
+end
+
+local lastCmd, lastCmdTime = nil, 0
+
+local function onChat(message)
+    -- Chatted and TextChatService can both report the same message.
+    if message == lastCmd and os.clock() - lastCmdTime < 0.5 then
+        return
+    end
+
+    local cmd, arg = message:match("^%s*(%.%S+)%s*(.-)%s*$")
+
+    if not cmd then
+        return
+    end
+
+    cmd = cmd:lower()
+
+    if cmd == ".v" then
+        lastCmd, lastCmdTime = message, os.clock()
+        hidden = not hidden
+    elseif cmd == ".give" then
+        lastCmd, lastCmdTime = message, os.clock()
+
+        if arg == "" then
+            return
+        end
+
+        local plr = findPlayer(arg)
+
+        if plr then
+            followPlayer = plr
+        else
+            warn("No player matching '" .. arg .. "'")
+        end
+    end
+end
+
+lp.Chatted:Connect(onChat)
+
+pcall(function()
+    game:GetService("TextChatService").MessageReceived:Connect(function(msg)
+        if msg.TextSource and msg.TextSource.UserId == lp.UserId then
+            onChat(msg.Text)
+        end
+    end)
+end)
+
+Players.PlayerRemoving:Connect(function(p)
+    if p == followPlayer then
+        followPlayer = lp
+    end
+end)
+
+-- PreSimulation runs before physics, so the constraints always see this frame's root.
+-- Anchors follow the root only, never the legs, so the leg swing can't shake anything.
+rs.PreSimulation:Connect(function()
+    local followRoot = getFollowRoot()
+
+    if not followRoot then
+        return
+    end
+
+    local base = followRoot.CFrame
+
+    if hidden then
+        base = CFrame.new(0, -HIDE_DEPTH, 0) * base
+    end
+
+    for _, unit in ipairs(units) do
+        local cf = base * unit.offset
+        unit.anchor.CFrame = cf
+
+        if unit.handle.Parent then
+            unit.handle.CFrame = cf
+            unit.handle.AssemblyAngularVelocity = Vector3.zero
+        end
+    end
+end)
