@@ -61,11 +61,15 @@ for _, part in pairs(char:GetDescendants()) do
 end
 
 ----------------------------------------------------------------------
--- Command sending (chat)
+-- Command sending (remote)
 ----------------------------------------------------------------------
 
 local function sendCmd(text)
-    game:GetService("TextChatService").TextChannels.RBXGeneral:SendAsync(text)
+    local args = {
+        "cmd",
+        text
+    }
+    game:GetService("ReplicatedStorage"):WaitForChild("01_server"):FireServer(unpack(args))
 end
 
 ----------------------------------------------------------------------
@@ -169,7 +173,7 @@ end)
 
 sendCmd("-gh " .. table.concat({ BIG_HEAD, BIG_HEAD, BIG_HEAD, HELMET, HEAD_1, HEAD_2 }, " "))
 
-task.wait(1)
+task.wait(2.5)
 
 sendCmd("-net")
 
